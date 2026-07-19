@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+*.local
+
+# Large data files (tracked via data/README.md provenance instead)
+data/raw/*.csv
+data/raw/*.xls
+data/raw/*.xlsx
+data/processed/
+data/interim/
+
+# Trained model artifacts
+models/*
+!models/.gitkeep
+
+# Logs and prediction records
+logs/
+*.log
+prediction_log.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

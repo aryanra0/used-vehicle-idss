@@ -1,0 +1,7 @@
+make,model,year,odometer,condition,body,state,listing_price
+kia,sorento,2015,20000,40,suv,ca,15000
+bmw,3 series,2014,30000,45,sedan,ca,20000
+ford,f-150,2013,90000,25,pickup,tx,
+honda,civic,2015,25000,42,sedan,fl,9000
+,x,2015,1000,30,,ca,
+toyota,camry,1975,1000,30,sedan,ca,
