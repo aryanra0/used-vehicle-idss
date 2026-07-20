@@ -13,8 +13,10 @@ joblib>=1.3
 # xgboost>=2.0
 # lightgbm>=4.0
 
-# Dashboard / UI
-streamlit>=1.30
+# API backend (serves the models to the Next.js dashboard)
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9   # required by FastAPI for the CSV batch upload endpoint
 
 # Testing
 pytest>=7.4

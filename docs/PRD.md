@@ -3,10 +3,10 @@
 
 | Field | Value |
 |---|---|
-| Document status | Draft v6 (multi-source data blend; full preprocessing pipeline) |
+| Document status | v7 (single-source: `car_prices`; real MMR as a model feature; FastAPI + Next.js) |
 | Course / Team | MSE 436 — Group 16 |
 | Product type | Intelligent Decision Support System (IDSS) |
-| Last updated | 2026-07-17 |
+| Last updated | 2026-07-18 |
 
 ---
 
@@ -47,7 +47,8 @@ The IDSS augments (does not replace) the human buyer. For a candidate vehicle it
 | Max purchase price | Highest acquisition price that still meets the user's target margin given predicted resale, repairs, and holding cost. |
 | Gross profit | Resale price − purchase price − estimated repairs − total holding cost. |
 | ROI / ROIC | Gross profit ÷ total invested capital (purchase + repairs). |
-| Confidence score | Calibrated model probability attached to the Buy/Pass recommendation. |
+| Confidence score | Per-prediction reliability (0–1) with a level and a plain-language basis. The Buy/Pass confidence is the weaker of the profit-model probability and the resale-estimate reliability. |
+| Data-quality flag | An advisory warning (abnormally low price, implausible ROI, valuation divergence, zero mileage) shown alongside a recommendation without changing the face-value Buy/Pass verdict. |
 
 ---
 
@@ -130,29 +131,30 @@ Full, testable acceptance criteria are maintained in `.kiro/specs/used-vehicle-i
 
 ### 6.2 Candidate Approach (informed by literature)
 - **Baselines first:** linear regression (M1), majority-class / logistic regression (M2, M3) to set a floor.
-- **Primary models:** gradient-boosted trees — XGBoost / LightGBM — which are the established best performers for tabular used-car price prediction; Random Forest is a strong, interpretable alternative and performed best in the referenced sale-time study.
-- **Blended, multi-source training:** M1 is trained on a harmonized blend of three real datasets (see §7) with a `source_channel` flag (wholesale vs retail) so the model learns the price-level offset instead of averaging it. Model year is a feature so era differences are represented.
+- **Primary models:** gradient-boosted trees — scikit-learn `HistGradientBoosting` (regressor for M1, classifier for M2/M3), the established best performers for tabular used-car price prediction and dependency-light. XGBoost/LightGBM are drop-in alternatives; Random Forest is a strong, interpretable option that performed best in the referenced sale-time study.
+- **Single-source training:** all models are trained on one coherent real dataset, `car_prices.csv` (~558k wholesale/auction records with real MMR and condition; see §7). An earlier version blended three sources with a `source_channel` flag; it was dropped because inconsistent naming caused benchmark lookups to miss and mixed retail/wholesale price levels made "resale" ambiguous relative to the wholesale MMR. Model year is a feature so era is represented.
+- **Real MMR as a feature:** the real Manheim MMR is used as the `market_value` feature — an external benchmark published before the sale (not derived from the sale price, so no leakage), and the single strongest predictor of resale. This is what makes the estimate track market value instead of behaving like a guess.
 - **Price target handling (M1):** apply a log transform to the (right-skewed) price and invert on output; evaluate error on the original dollar scale.
-- **Preprocessing (full pipeline, see §7.5):** EDA/profiling, schema harmonization, string parsing, dedup, outlier removal, documented missing-value policy, categorical encoding (ordinal for trees; cross-fold target/frequency encoding for high-cardinality `model` and the market-value proxy), standardization only for linear baselines, and engineered features (vehicle age, mileage-per-year, VIN-decoded specs, group-median market value, regional price index).
+- **Preprocessing (see §7.5):** load + clean the single source (parse numeric strings, sanity-bound price/mileage/year, sanitize the contaminated `transmission` column, dedup), ordinal-encode categoricals for the tree models, log-transform the price target, and engineer a small set of features (vehicle age, mileage-per-year) alongside the raw fields and the real MMR.
 - **Modular design:** separate price (M1), time-to-sell (M2), and decision logic (M3) for interpretability. M3 consumes M1 output plus features and business rules.
 - **M3 label (wholesale acquisition):** dealerships buy below market value and resell. M3's label is whether a car, if bought at a typical wholesale discount below its market value (MMR, default 20%), would still resell for enough to clear the target margin. This reflects the real acquisition decision and is learnable from features. An earlier framing ("resells above its own MMR") was near-noise because MMR already predicts the sale price. M3's probabilities are **calibrated** and its decision threshold is **tuned on a validation set to maximize F1** (not fixed at 0.5).
 
 ### 6.3 Features
-All features are available at prediction time and knowable before acquisition (no target leakage).
+All features are available at prediction time and knowable before acquisition (no target leakage). Only fields the UI actually collects are used, so every input the user changes moves the prediction.
 
-- **Harmonized raw:** year, make, model, mileage, state, condition (where present), `source_channel`.
-- **VIN-decoded (where a VIN exists):** body, cylinders, fuel type, drivetrain — recovers fields the retail source lacks.
-- **Engineered:** vehicle age (current year − model year); mileage-per-year; regional (state) price index; model-frequency / brand tier; group-median market-value proxy (make/model/year, computed cross-fold to avoid leakage); seasonal flag where sale dates exist.
-- **Days-to-sell join:** average days-to-sell by make/segment from the industry benchmark file, used to derive the M2 band label.
-- **Adjustable parameters (user, not learned):** target profit margin, risk tolerance, holding cost, holding period.
-- Features present in only some sources (e.g., condition) are left blank elsewhere; the tree models handle missing values natively.
+- **Raw:** year, make, model, body, transmission, state, color, mileage, condition.
+- **Real MMR:** `market_value` — the vehicle's real Manheim MMR benchmark (an external, pre-sale value; not the sale price, so no leakage). The strongest single feature.
+- **Engineered:** vehicle age (reference year 2016 − model year) and mileage-per-year.
+- **Days-to-sell join:** average days-to-sell by make from the Edmunds benchmark, used to derive the M2 band label.
+- **Adjustable parameters (user, not learned):** target profit margin, acquisition discount, risk tolerance, holding cost, holding period, repair estimate.
+- The sale `price` is the only leakage-excluded column. `condition` may be missing and is left NaN (the tree models handle it natively).
 
 ### 6.4 Evaluation and Targets
-- Split **chronologically by sale date where dates exist**, else stratified by model year and source; always reserve a **recent (2020+) holdout** for a dedicated recency test.
-- M1 evaluated with MAE, MAPE, RMSLE, R² — reported **overall, per source, and on the 2020+ holdout**; M2 with accuracy, macro-F1, ROC-AUC; M3 with F1 (at the tuned threshold), ROC-AUC, AUC-PR, and calibration (Brier score).
-- **Combination check:** the blended model must beat any single source on the 2020+ holdout; otherwise the blend is reconsidered.
-- **Honest reporting for M3:** because the profitable class is the majority (~72%), a naive "always Buy" classifier already scores a high F1 (~0.84). M3's F1 is therefore always reported **alongside that trivial-baseline F1 and the threshold-independent AUC/AUC-PR**, so a high F1 is not mistaken for skill it does not have. Current results: F1 ≈ 0.88, ROC-AUC ≈ 0.86, AUC-PR ≈ 0.93 (trivial-baseline F1 ≈ 0.84).
-- All models must **beat their baseline** by a documented margin before release; per-region (state) error tracked for fairness.
+- Split the single source into **train / validation / test** (random, seeded). The test set is held out for final metrics; the validation set tunes the M3 decision threshold.
+- M1 evaluated with MAE, MAPE, RMSLE, R²; M2 with accuracy, macro-F1; M3 with F1 (at the tuned threshold), ROC-AUC, AUC-PR, and calibration (Brier score). Per-state error is tracked for fairness.
+- **M1 baseline:** just quoting MMR as the resale price; M1 must beat that MAE by using condition/mileage/etc. **Current results:** MAE ≈ $956, MAPE ≈ 11.4%, R² ≈ 0.966 vs an MMR-baseline MAE ≈ $1,091.
+- **Honest reporting for M3:** the profitable class is the majority (~77%), so a naive "always Buy" classifier already scores a high F1 (~0.87). M3's F1 is therefore always reported **alongside that trivial-baseline F1 and the threshold-independent AUC/AUC-PR**, so a high F1 is not mistaken for skill it does not have. **Current results:** F1 ≈ 0.89, ROC-AUC ≈ 0.84, AUC-PR ≈ 0.94 (trivial-baseline F1 ≈ 0.87).
+- All models must **beat their baseline** by a documented margin before release.
 
 ### 6.5 Retraining and Learning Loop
 - Retrain on a rolling window when new labeled sales accumulate, or sooner on significant market shifts.
@@ -163,10 +165,9 @@ All features are available at prediction time and knowable before acquisition (n
 - **Regional fairness:** the model shall avoid systematically over- or under-valuing vehicles from particular regions; per-state error shall be evaluated and monitored.
 
 ### 6.7 Assumptions and Known Limitations
-- **Blended price levels:** training mixes wholesale (sold) and retail (asking) prices; the `source_channel` flag lets the model separate them, and the tool reports a configured channel (retail by default). Where a source has asking rather than sold prices, predictions reflect asking prices.
-- **Condition coverage:** condition exists only for the wholesale (`car_prices`) rows; it is blank for the retail sources and cannot be engineered.
-- **Market value:** a real MMR exists only for the wholesale rows; elsewhere a **group-median-price proxy** is used and labeled as derived (not an independent benchmark).
-- **Recency:** most rows are ≤2018; only ~1,258 are model year 2020+. Predictions for 2020+ are supported but lower-confidence, and the out-of-coverage warning triggers beyond model year 2024. Truly current prices still require a live feed.
+- **Wholesale price basis:** the source is wholesale/auction data, so "resale" is a wholesale value (a conservative proxy for a dealer's true retail margin), directly comparable to the wholesale MMR benchmark.
+- **Coverage of rare vehicles:** exotics and low-volume models have few comparable rows, so their resale estimates are lower-confidence. Such estimates are reconciled toward MMR and flagged with low confidence rather than trusted blindly.
+- **Recency:** the source is ~1990–2015 (bulk 2014–2015), so predictions reflect that market. The out-of-coverage warning triggers beyond model year 2015; truly current prices require a live feed (see §12).
 - Days-to-sell is available only as a **make/segment benchmark average**, not a per-car duration; the day-scale bands (≤60 / 61–90 / 91–120 / >120) are calibrated to the observed benchmark distribution (~40–105 days, median ~71).
 
 ### 6.8 Decision Logic (Buy/Pass and Max Purchase Price)
@@ -192,58 +193,60 @@ Note: the ROI and dollar-profit thresholds are cost-sensitive by design (Section
 
 **Default purchase scenario.** When the user does not supply a listing price, the system evaluates the vehicle at a typical **wholesale acquisition price** — a discount below market value (MMR), default 20% — reflecting that dealers buy below market. When a listing price is supplied, that price is used directly.
 
+The **max purchase price is a ceiling** (a walk-away/negotiation limit), not a target. When a listing price is below it, the buyer pays the listing (or negotiates lower), never the ceiling; the UI states this explicitly.
+
+### 6.9 Confidence and Data-Quality Guards
+- **Per-prediction confidence.** Each output — resale, market value, days-to-sell, and buy/pass — carries its own reliability score (0–1), a level (High/Medium/Low/Very low), and a plain-language basis. Resale reliability reflects how well the vehicle matched comparable data and how far the model diverges from MMR; the buy/pass confidence is the weaker of the profit-model probability and the resale reliability, and is what feeds the risk-tolerance gate.
+- **Reconciliation toward MMR.** When the resale estimate is low-confidence (rare/exotic vehicle or large divergence), it is blended toward the MMR benchmark in proportion to confidence — a confidence-weighted shrink, not a hard cap. High-confidence vehicles keep any legitimate premium over MMR.
+- **Advisory data-quality flags, not verdict overrides.** The Buy/Pass call is made on face-value economics. Separately, the system flags inputs/outputs that don't add up — an abnormally low price (likely salvage/branded title, wrong trim, or a data-entry error), an implausible ROI, a resale-vs-MMR divergence, or zero mileage — as prominent warnings that prompt the buyer to verify, but do not change the recommendation.
+
 ---
 
-## 7. Data Sources
+## 7. Data Source
 
-Price models train on a **blend of three real datasets**, harmonized to a common schema with a `source_channel` flag. Tree models handle features present in only some sources via native missing-value support, so no source-specific column is discarded.
+All models train on a **single real dataset**, `car_prices.csv`, cleaned by
+`src/idss/data/dataset.py`. Using one coherent source (rather than an earlier three-source
+blend) keeps model naming consistent, provides a real MMR benchmark, and keeps the price
+basis uniformly wholesale so resale and MMR are comparable.
 
-### 7.1 Base — Retail Listings (`true_car_listings.csv`)
-- ~852,000 real US retail listings; model years ≤2018. Largest, cleanest real source.
-- Fields: Price (asking), Year, Mileage, City, State, **VIN**, Make, Model.
-- Strengths: scale, real signal (price rises with year, falls with mileage), and VINs that enable decoding of body/engine/fuel/drivetrain. Cleaning: split transmission out of the model string; standardize state codes.
+### 7.1 Primary source — `car_prices.csv` (wholesale/auction)
+- ~558,000 real US wholesale/auction records; model years ~1990–2015. Public "Vehicle Sales Data" (Kaggle).
+- Fields: year, make, model, trim, body, transmission, vin, state, **condition**, odometer, color, interior, seller, **mmr**, **sellingprice** (the resale target), saledate.
+- Provides real sold prices, the only **condition** signal, and a real **MMR** benchmark used both as a feature and as a make/model/year lookup.
+- Cleaning: parse numeric strings; sanity-bound price/mileage/year; sanitize the contaminated `transmission` column; de-duplicate.
 
-### 7.2 Wholesale + Condition + MMR (`car_prices.csv`)
-- ~558,000 real wholesale/auction records, ≤2015. Contributes the only **condition** signal, real **sold prices**, and a real **MMR** market-value benchmark.
-- Tagged `source_channel = wholesale`.
-
-### 7.3 Recency Source (`used_cars.csv`)
-- ~4,000 real retail records reaching **2013–2024**; contributes recent (2019+) coverage plus fuel/transmission/accident/title.
-
-### 7.4 Days-to-Sell Benchmark — Edmunds "Days To Turn" (`2016-10-dtt.xls`)
+### 7.2 Days-to-Sell Benchmark — Edmunds "Days To Turn" (`2016-10-dtt.xls`)
 - Monthly average days-to-sell by manufacturer/make/segment; used to derive the M2 band. Aggregate, not per-car.
 
-### 7.5 Preprocessing Pipeline (run before modeling)
-Ordered stages, each producing a versioned artifact:
-1. **EDA/profiling** per source (ranges, skew, missingness, outliers, cardinality, duplicate/overlap scan, wholesale-vs-retail price gap) → persisted EDA summary.
-2. **Schema harmonization** to a common schema + `source_channel` + originating-source tag.
-3. **Parsing/normalization** — `$`/comma prices, "mi." mileage, transmission-from-model split, casing/whitespace, state codes.
-4. **Dedup** — by VIN where present, else exact-row, within and across sources.
-5. **Outlier/sanity filtering** — documented price/mileage/year bounds.
-6. **Missing-value policy** — per column; keep source-only columns as NaN (trees handle natively).
-7. **Feature engineering** — VIN decode, group-median market-value proxy (cross-fold), regional index, age, miles/year.
-8. **Target transform + encoding** — log price target; ordinal encoding for trees; cross-fold target/frequency encoding for high-cardinality fields; standardization only for linear baselines.
-9. **Splitting** — chronological by sale date where available, else stratified by year/source; reserve a recent (2020+) holdout.
-- Maintain a data dictionary; record dataset versions, source composition, and model version with each prediction (reproducibility).
+### 7.3 Preprocessing Pipeline (run before modeling)
+1. **Load + clean** `car_prices.csv`: parse `$`/comma prices and mileage to numbers; sanity-bound price ($500–$250k), mileage (1–400k), and year (1990–2015); sanitize the contaminated `transmission` column (keep only `automatic`/`manual`); de-duplicate.
+2. **Split** into train / validation / test (random, seeded); persist to `data/processed/`.
+3. **Encoding** — ordinal encoding of categoricals for the tree models.
+4. **Target transform** — log-transform the resale-price target for M1; invert on output.
+5. **Feature engineering** — vehicle age and mileage-per-year, alongside the raw fields and the real MMR (`market_value`).
+- Model artifacts and their metrics/metadata are versioned in a simple registry.
 
-### 7.6 Rejected Sources
-- **`car_sales_data.csv` (+ duplicate)** and the other synthetic files — randomized make/model (e.g., "Nissan F-150", "Tesla … Petrol Manual"), price uncorrelated with year/mileage; no usable signal; excluded.
-- **Moroccan used-cars dataset** — wrong market and currency (Moroccan dirham); excluded.
+### 7.4 Present but Unused
+`true_car_listings.csv` (~852k retail listings) and `used_cars.csv` (~4k, reaches 2024) remain in `data/raw/` from the earlier three-source blend but are **not** loaded by the current pipeline; the old multi-source loader (`harmonize.py`) is likewise retained but unused.
 
-### 7.7 Optional / Future Sources
-- **`Car Sales.xlsx`** (buyer demographics) — optional demand/segmentation side-analysis, not merged into the pricing model.
-- **MarketCheck / Auto.dev API (future)** — live current-market prices; the only path to truly "today's" pricing (see §6.7 recency limitation).
+### 7.5 Rejected Sources
+- **`car_sales_data.csv` (+ duplicate)** and other synthetic files — randomized make/model (e.g., "Nissan F-150"), price uncorrelated with year/mileage; no usable signal; excluded.
+- **Moroccan used-cars dataset** — wrong market and currency; excluded.
+- **`car_sales_demographics.csv`** — buyer demographics only; not useful for pricing.
+
+### 7.6 Future Sources
+- **MarketCheck / Auto.dev API** — live current-market prices; the only path to truly "today's" pricing (see §6.7 recency limitation and §12).
 
 ---
 
 ## 8. System Workflow
 
 1. User enters vehicle information (manual entry or bulk CSV upload) plus assumptions (holding cost, repair estimate).
-2. System looks up the market-value benchmark (real MMR where available, else the group-median proxy) and the make/segment days-to-sell benchmark.
-3. Features are engineered from inputs plus benchmarks.
-4. Models produce resale value (M1), days-to-sell band (M2), and profitability (M3), in real time for the individual vehicle.
-5. Business rules compute maximum purchase price, ROI, and Buy/Pass under the user's constraints.
-6. Dashboard updates instantly; user can adjust assumptions and re-evaluate.
+2. System looks up the market-value benchmark (the vehicle's MMR — user-provided, a live feed if configured, else a make/model/year median from the training data) and the make days-to-sell benchmark.
+3. Features are engineered from inputs plus the MMR benchmark.
+4. Models produce resale value (M1), days-to-sell band (M2), and profitability (M3) in real time; a low-confidence resale is reconciled toward MMR.
+5. Business rules compute maximum purchase price, ROI, and the face-value Buy/Pass under the user's constraints; per-prediction confidence and any data-quality flags are attached.
+6. The FastAPI backend returns the result; the Next.js dashboard updates instantly and the user can adjust assumptions and re-evaluate.
 7. After sale, realized outcomes feed monitoring and the retraining/feedback loop.
 
 ---

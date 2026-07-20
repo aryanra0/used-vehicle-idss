@@ -1,50 +1,83 @@
 # Data
 
 Provenance and dictionary for the datasets used by the IDSS. Raw data files are
-**gitignored** (they are large); this document records what they are and where they came from.
+**gitignored** (they are large); this document records what they are and where they came
+from.
 
-The price models train on a **blend of three real sources** (see `src/idss/data/harmonize.py`),
-harmonized to a common schema with a `source_channel` flag (wholesale vs retail).
+## Training source (single source)
 
-## 1. Retail base — `raw/true_car_listings.csv`
-- ~852,000 real US retail listings; model years ≤2018. Largest, cleanest source.
-- Columns: Price (asking), Year, Mileage, City, State, VIN, Make, Model.
-- Role: primary base for **M1 (resale price)**. `source_channel = retail`.
-- Note: transmission is smushed onto `Model` (e.g., "ILX6-Speed") and is stripped during harmonization.
+The models train on **one real source**, `raw/car_prices.csv`, loaded and cleaned by
+`src/idss/data/dataset.py`. We deliberately use a single coherent source rather than
+blending several (see "Why one source" below).
 
-## 2. Wholesale + condition + MMR — `raw/car_prices.csv`
-- ~558,000 real wholesale/auction records, ~2014–2015. Public "Vehicle Sales Data" (Kaggle).
-- Columns include: year, make, model, trim, body, transmission, vin, state, **condition**, odometer,
-  color, interior, seller, **mmr**, **sellingprice** (mapped to `price`), saledate.
-- Role: contributes real sold prices, the only **condition** signal, and a real **MMR** benchmark.
-  `source_channel = wholesale`.
+### `raw/car_prices.csv` — wholesale/auction, with condition + MMR
+- ~558,000 real US wholesale/auction records; model years ~1990–2015. Public "Vehicle
+  Sales Data" (Kaggle).
+- Columns include: year, make, model, trim, body, transmission, vin, state, **condition**,
+  odometer, color, interior, seller, **mmr**, **sellingprice** (the resale target), saledate.
+- Provides real sold prices, the only **condition** signal, and a real **MMR**
+  (Manheim Market Report) wholesale benchmark.
 
-## 3. Recency — `raw/used_cars.csv`
-- ~4,000 real US retail records reaching **2013–2024**.
-- Columns: brand, model, model_year, milage, fuel_type, engine, transmission, ext/int color,
-  accident, clean_title, price.
-- Role: recent (2019+) coverage. `source_channel = retail`.
-
-## Days-to-Sell Benchmark — `raw/2016-10-dtt.xls`
-- Edmunds "Days To Turn": monthly average days-to-sell by manufacturer/make/segment (Oct 2015–Oct 2016).
-- Role: joined by make to derive the **M2 days-to-sell band** (Fast ≤60, Moderate 61–90, Slow 91–120, Very slow >120; calibrated to the observed ~40–105 day spread, median ~71).
+### Days-to-sell benchmark — `raw/2016-10-dtt.xls`
+- Edmunds "Days To Turn": monthly average days-to-sell by manufacturer/make/segment
+  (Oct 2015–Oct 2016).
+- Joined by make to derive the **M2 days-to-sell band** (Fast ≤60, Moderate 61–90,
+  Slow 91–120, Very slow >120; calibrated to the observed ~40–105 day spread, median ~71).
 - Caveat: aggregate (not per-car), different period → treated as an approximate benchmark.
 
-## Harmonized schema (after `harmonize.load_blended()`)
-`price, year, mileage, make, model, state, condition (nullable), source_channel, source`
+## Cleaned schema (after `dataset.load_car_prices()`)
+`price (sellingprice), mmr, year, mileage, condition, make, model, body, transmission,
+state, color`
 
-## Market value
-Real `mmr` exists only for the wholesale source; elsewhere a **group-median-price proxy**
-(by make/model/year, retail-biased) stands in, computed in `mmr_lookup.py`.
+Cleaning: parse numeric strings; drop rows missing price/mmr/year/mileage/make/model;
+apply sanity bounds (price $500–$250k, mileage 1–400k, year 1990–2015); sanitize the
+`transmission` column (only `automatic`/`manual` are valid; other values are contaminated
+and set to unknown); de-duplicate.
 
-## Rejected / removed sources
-- `car_sales_data.csv` (+ duplicates) — **synthetic**: 5 makes × 5 models randomly paired
+## Train / validation / test splits
+`dataset.train_val_test_split()` produces a random, seeded split written to
+`data/processed/` (gitignored):
+- **test** (~20%) — held out for honest final metrics.
+- **val** (~15% of the remainder) — used to tune the M3 decision threshold.
+- **train** — everything else.
+
+## Market value (MMR)
+`car_prices` ships a real `mmr` column, so the IDSS uses the **real MMR** — not a proxy —
+in two ways:
+1. As a **model feature** (`market_value`) for M1/M2/M3. MMR is an external market
+   benchmark published before the sale, not derived from this row's sale price, so it is
+   a legitimate (non-leaking) feature and is the single strongest predictor of resale.
+2. As a make/model/year **median lookup** (`src/idss/data/mmr_lookup.py`) for user-entered
+   vehicles that don't supply an MMR, with progressive fallback (make/model/year →
+   make/model → make → global) and sample-size tracking for a reliability score.
+
+## Why one source (not a blend)
+An earlier version blended three sources (`true_car_listings.csv`, `car_prices.csv`,
+`used_cars.csv`) with a `source_channel` flag. That was dropped because:
+- **Inconsistent naming across sources** caused MMR/model lookups to miss and fall back to
+  a near-useless make-level median (e.g., "median of all Toyotas").
+- **Mixed price levels** — retail asking vs wholesale sold — made "resale" an ambiguous
+  number that sat above the wholesale MMR benchmark it was compared against.
+- Only `car_prices` has real MMR and condition, the two signals the whole decision rests on.
+
+Using `car_prices` alone gives consistent naming, a real MMR benchmark, condition grades,
+and one price basis (wholesale) that is directly comparable to MMR.
+
+## Present but unused
+`raw/true_car_listings.csv` and `raw/used_cars.csv` remain in the repo from the earlier
+blend and for possible future work, but are **not** loaded by the current training
+pipeline. (`src/idss/data/harmonize.py`, the old multi-source loader, is likewise retained
+but unused.)
+
+## Rejected sources
+- `car_sales_data.csv` (+ duplicates) — **synthetic**: randomly paired make/model
   ("Nissan F-150"), no real signal.
-- `car-price-prediction` / Georgian `train.csv`/`test.csv` — different schema (Levy, Airbags), not used.
+- `car-price-prediction` / Georgian `train.csv`/`test.csv` — different schema
+  (Levy, Airbags), not used.
 - Moroccan used-cars dataset — wrong market and currency.
 - `car_sales_demographics.csv` — buyer demographics only; not useful for pricing.
-All removed during cleanup.
 
 ## Future
-- Live current-market prices via MarketCheck/Auto.dev API (the only path to true "today" pricing).
+- Live current-market prices via MarketCheck/Auto.dev API — the only path to true "today"
+  pricing (see `.env.example`).
 - A per-car listing/entry date would enable a real per-vehicle days-to-sell model.
