@@ -34,8 +34,8 @@ def make_profit_labels(
 ) -> pd.Series:
     """1 if buying at the wholesale discount clears the target margin, else 0.
 
-    Uses `market_value` (real MMR where available, else the group-median-price
-    proxy) as the reference. The actual sale `price` stands in for realized value.
+    Uses `market_value` (the real Manheim MMR from car_prices) as the reference.
+    The actual sale `price` stands in for realized value.
     """
     buy_price = (1.0 - acquisition_discount) * df["market_value"].replace(0, np.nan)
     gain = (df["price"] - buy_price) / buy_price

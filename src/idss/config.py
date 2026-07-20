@@ -14,10 +14,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 MODELS_DIR = PROJECT_ROOT / "models"
 
-# Blended training sources (see idss/data/harmonize.py).
-PRIMARY_DATASET = RAW_DATA_DIR / "car_prices.csv"          # wholesale + condition + MMR
-TRUE_CAR_DATASET = RAW_DATA_DIR / "true_car_listings.csv"  # retail base
-USED_CARS_DATASET = RAW_DATA_DIR / "used_cars.csv"         # recency (2019+)
+# Single training source: car_prices.csv. The other dataset paths below are
+# retained only for the unused legacy multi-source loader (idss/data/harmonize.py)
+# and are NOT part of the current single-source pipeline.
+PRIMARY_DATASET = RAW_DATA_DIR / "car_prices.csv"          # sole training source: wholesale + condition + MMR
+TRUE_CAR_DATASET = RAW_DATA_DIR / "true_car_listings.csv"  # legacy/unused (retail listings)
+USED_CARS_DATASET = RAW_DATA_DIR / "used_cars.csv"         # legacy/unused (recency, reaches 2024)
 DTT_BENCHMARK_XLS = RAW_DATA_DIR / "2016-10-dtt.xls"       # days-to-sell benchmark
 
 # --- Default decision thresholds (user-overridable) ----------------------

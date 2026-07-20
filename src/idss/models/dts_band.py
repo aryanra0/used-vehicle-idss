@@ -2,9 +2,9 @@
 
 Labels come from the make-level Edmunds "Days To Turn" benchmark (Requirement 11):
 each training row's make is mapped to an average days-to-sell, then to a band
-(Fast / Moderate / Slow / Very slow). A Random Forest learns to reproduce and
-generalize that mapping from vehicle features. This is a benchmark-level estimate,
-not a per-car duration.
+(Fast / Moderate / Slow / Very slow). A HistGradientBoosting classifier learns to
+reproduce and generalize that mapping from vehicle features. This is a
+benchmark-level estimate, not a per-car duration.
 """
 
 from __future__ import annotations

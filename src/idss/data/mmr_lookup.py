@@ -1,9 +1,11 @@
-"""Market-value benchmark lookup (group-median-price proxy).
+"""Market-value benchmark lookup (real MMR medians from car_prices).
 
-Builds a lookup table from the blended training data so a user-entered vehicle
-can be assigned a comparable market value. When the source has a real MMR column
-it is used; otherwise the group-median of retail `price` serves as the proxy
-(Requirement 2). Also computes the price-vs-market delta for display.
+Builds a lookup table from the single-source training data so a user-entered
+vehicle can be assigned a comparable market value. car_prices ships a real
+Manheim MMR column, so that is the value used (Requirement 2, 12.3). The generic
+`value_col` fallback (median `price`) is retained only for datasets without an
+MMR column and is not exercised by the current single-source pipeline. Also
+computes the price-vs-market delta for display.
 
 Lookup falls back progressively when an exact match is missing:
     (make, model, year) -> (make, model) -> (make) -> global median
