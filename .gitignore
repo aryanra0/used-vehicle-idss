@@ -35,3 +35,9 @@ prediction_log.*
 Thumbs.db
 .idea/
 .vscode/
+
+# Design-reference library (not part of this project)
+awesome-design-md/
+
+# Kiro tooling skills (not project code; keep .kiro/specs/)
+.kiro/skills/
